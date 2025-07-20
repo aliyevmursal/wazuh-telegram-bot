@@ -29,6 +29,6 @@
   "message_templates": {
     "default": true,
     "custom_header": "",
-    "custom_footer": "\n\n<i>🔧 Enhanced Wazuh Telegram Integration v2.0.0</i>\n<i>👨‍💻 Developed by Mursal Aliyev</i>"
+    "custom_footer": "\n\n<i>🔧 Enhanced Wazuh Telegram Integration v2.0.1</i>"
   }
 }
