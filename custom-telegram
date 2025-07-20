@@ -1,6 +1,6 @@
 #!/bin/sh
 # Enhanced Wazuh Telegram Integration Wrapper
-# Author Mursal Aliyev
+# Author: Mursal Aliyev
 
 WPYTHON_BIN="framework/python/bin/python3"
 SCRIPT_PATH_NAME="$0"
