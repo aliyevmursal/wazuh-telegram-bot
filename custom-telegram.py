@@ -5,6 +5,7 @@ Advanced security alert notification system for Wazuh SIEM
 
 Author: Mursal Aliyev
 GitHub: https://github.com/aliyevmursal
+License: MIT
 """
 
 import sys
@@ -17,7 +18,7 @@ from datetime import datetime
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-__version__ = "2.0.0"
+__version__ = "2.0.1"
 __author__ = "Mursal Aliyev"
 
 class WazuhTelegramIntegration:
@@ -53,6 +54,12 @@ class WazuhTelegramIntegration:
                 "medium": [3, 4, 5, 6, 7],
                 "high": [8, 9, 10, 11],
                 "critical": [12, 13, 14, 15]
+            },
+            "custom_filters": {
+                "exclude_rules": [],
+                "include_only_rules": [],
+                "exclude_agents": [],
+                "include_only_agents": []
             }
         }
         
@@ -109,6 +116,32 @@ class WazuhTelegramIntegration:
         except:
             return timestamp_str
     
+    def should_filter_alert(self, alert_data):
+        """Check if alert should be filtered"""
+        filters = self.config.get('custom_filters', {})
+        
+        # Check rule filters
+        rule_id = alert_data.get('rule_id')
+        if rule_id and rule_id != 'N/A':
+            try:
+                rule_id_int = int(rule_id)
+                if filters.get('exclude_rules') and rule_id_int in filters['exclude_rules']:
+                    return True
+                if filters.get('include_only_rules') and rule_id_int not in filters['include_only_rules']:
+                    return True
+            except ValueError:
+                pass
+        
+        # Check agent filters
+        agent_name = alert_data.get('agent_name')
+        if agent_name and agent_name != 'N/A':
+            if filters.get('exclude_agents') and agent_name in filters['exclude_agents']:
+                return True
+            if filters.get('include_only_agents') and agent_name not in filters['include_only_agents']:
+                return True
+        
+        return False
+    
     def extract_alert_data(self, alert_json):
         """Extract alert data"""
         data = {}
@@ -128,7 +161,14 @@ class WazuhTelegramIntegration:
         data['location'] = alert_json.get('location', 'N/A')
         data['srcip'] = alert_json.get('srcip', 'N/A')
         data['dstip'] = alert_json.get('dstip', 'N/A')
-        data['user'] = alert_json.get('data', {}).get('user', 'N/A')
+        
+        # Handle nested data fields
+        alert_data = alert_json.get('data', {})
+        if isinstance(alert_data, dict):
+            data['user'] = alert_data.get('user', 'N/A')
+        else:
+            data['user'] = 'N/A'
+            
         data['program_name'] = alert_json.get('program_name', 'N/A')
         data['full_log'] = alert_json.get('full_log', 'N/A')
         
@@ -157,18 +197,22 @@ class WazuhTelegramIntegration:
 
         if alert_data['srcip'] != 'N/A':
             message += f"<b>🌐 Source IP:</b> <code>{alert_data['srcip']}</code>\n"
+        if alert_data['dstip'] != 'N/A':
+            message += f"<b>🌐 Destination IP:</b> <code>{alert_data['dstip']}</code>\n"
         if alert_data['user'] != 'N/A':
             message += f"<b>👤 User:</b> <code>{alert_data['user']}</code>\n"
         if alert_data['program_name'] != 'N/A':
             message += f"<b>⚙️ Program:</b> <code>{alert_data['program_name']}</code>\n"
+        if alert_data['rule_groups']:
+            message += f"<b>🏷️ Groups:</b> <code>{alert_data['rule_groups']}</code>\n"
 
         if alert_data['full_log'] != 'N/A':
-            log_snippet = alert_data['full_log'][:200]
-            if len(alert_data['full_log']) > 200:
+            log_snippet = alert_data['full_log'][:300]
+            if len(alert_data['full_log']) > 300:
                 log_snippet += "..."
             message += f"\n<b>📝 Log:</b>\n<pre>{log_snippet}</pre>"
         
-        message += f"\n\n<i>🔧 Enhanced Wazuh Telegram Integration v{__version__}</i>\n<i>👨‍💻 Developed by {__author__}</i>"
+        message += f"\n\n<i>🔧 Enhanced Wazuh Telegram Integration v{__version__}</i>"
         
         if len(message) > self.config['max_message_length']:
             message = message[:self.config['max_message_length']-3] + "..."
@@ -224,11 +268,17 @@ class WazuhTelegramIntegration:
                 alert_json = json.load(alert_file)
             
             alert_data = self.extract_alert_data(alert_json)
+            
+            # Apply filtering
+            if self.should_filter_alert(alert_data):
+                self.logger.info(f"Alert filtered out: Rule {alert_data['rule_id']}")
+                return True
+            
             message = self.create_message(alert_data)
             success = self.send_message(message, hook_url)
             
             if success:
-                self.logger.info(f"Alert processed: Rule {alert_data['rule_id']}")
+                self.logger.info(f"Alert processed: Rule {alert_data['rule_id']} - Level {alert_data['rule_level']}")
             
             return success
             
@@ -239,7 +289,7 @@ class WazuhTelegramIntegration:
 def main():
     """Main function"""
     print(f"Enhanced Wazuh Telegram Integration v{__version__}")
-    print(f"Developed by {__author__}")
+    print(f"Author: {__author__}")
     print("=" * 50)
     
     if len(sys.argv) != 4:
