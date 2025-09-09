@@ -18,7 +18,7 @@ from datetime import datetime
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-__version__ = "2.0.1"
+__version__ = "2.1.0"
 __author__ = "Mursal Aliyev"
 
 class WazuhTelegramIntegration:
@@ -45,6 +45,7 @@ class WazuhTelegramIntegration:
         """Load configuration from JSON file"""
         default_config = {
             "chat_id": "",
+            "hook_url": "",
             "parse_mode": "HTML",
             "disable_notification": False,
             "rate_limit_seconds": 1,
@@ -75,6 +76,23 @@ class WazuhTelegramIntegration:
             print(f"Config error: {e}")
             
         return default_config
+
+    def resolve_hook_url(self, cli_hook_url=None):
+        """Resolve hook URL from CLI, environment, or config"""
+        if cli_hook_url and isinstance(cli_hook_url, str) and cli_hook_url.strip():
+            return cli_hook_url.strip()
+
+        # Env vars take precedence if CLI not provided
+        env_hook = os.getenv("TELEGRAM_HOOK_URL") or os.getenv("HOOK_URL")
+        if env_hook and env_hook.strip():
+            return env_hook.strip()
+
+        # Config fallback
+        cfg_hook = self.config.get("hook_url")
+        if cfg_hook and isinstance(cfg_hook, str) and cfg_hook.strip():
+            return cfg_hook.strip()
+
+        return None
     
     def setup_logging(self):
         """Setup logging"""
@@ -291,15 +309,24 @@ def main():
     print(f"Enhanced Wazuh Telegram Integration v{__version__}")
     print(f"Author: {__author__}")
     print("=" * 50)
-    
-    if len(sys.argv) != 4:
-        print("Usage: custom-telegram.py <alert_file> <rule_id> <hook_url>")
+
+    # Accept either: script + 3 args (alert_file, rule_id, hook_url)
+    # or script + 2 args (alert_file, rule_id) with hook_url from env/config
+    if len(sys.argv) < 3 or len(sys.argv) > 4:
+        print("Usage: custom-telegram.py <alert_file> <rule_id> [<hook_url>]")
+        print("You can also set TELEGRAM_HOOK_URL/HOOK_URL env vars or hook_url in telegram_config.json")
         sys.exit(1)
-    
+
     alert_file_path = sys.argv[1]
-    hook_url = sys.argv[3]
-    
+    cli_hook_url = sys.argv[3] if len(sys.argv) == 4 else None
+
     integration = WazuhTelegramIntegration()
+    hook_url = integration.resolve_hook_url(cli_hook_url)
+    if not hook_url:
+        print("Error: hook_url not provided and not found in env/config")
+        print("Provide <hook_url> arg, or set TELEGRAM_HOOK_URL/HOOK_URL env var, or set hook_url in /var/ossec/integrations/telegram_config.json")
+        sys.exit(1)
+
     success = integration.process_alert(alert_file_path, hook_url)
     
     sys.exit(0 if success else 1)
