@@ -1,22 +1,14 @@
 {
   "chat_id": "",
+  "hook_url": "",
+  "message_thread_id": null,
   "parse_mode": "HTML",
   "disable_notification": false,
   "rate_limit_seconds": 1,
   "max_message_length": 4096,
-  "include_fields": [
-    "timestamp",
-    "agent", 
-    "rule",
-    "location",
-    "srcip",
-    "dstip", 
-    "user",
-    "program_name"
-  ],
   "severity_levels": {
     "low": [0, 1, 2],
-    "medium": [3, 4, 5, 6, 7], 
+    "medium": [3, 4, 5, 6, 7],
     "high": [8, 9, 10, 11],
     "critical": [12, 13, 14, 15]
   },
@@ -27,8 +19,7 @@
     "include_only_agents": []
   },
   "message_templates": {
-    "default": true,
     "custom_header": "",
-    "custom_footer": "\n\n<i>🔧 Enhanced Wazuh Telegram Integration v2.0.1</i>"
+    "custom_footer": ""
   }
 }
