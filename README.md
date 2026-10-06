@@ -80,24 +80,17 @@ sudo systemctl status wazuh-manager
 🔢 Rule ID: 31151
 📅 Time: 2025-07-21 14:30:45 UTC
 
-🖥️ Agent Information:
-• Name: web-server-01
-• ID: 001
-• IP: 192.168.1.100
-
+🖥️ Agent: web-server-01 (192.168.1.100)
 📍 Location: /var/log/auth.log
-
-🌐 Network Information:
-• Source IP: 192.168.1.200
-
+🌐 Source IP: 192.168.1.200
 👤 User: admin
 ⚙️ Program: sshd
 🏷️ Groups: authentication_failed, authentication_failures
 
-📝 Log Extract:
+📝 Log:
 Failed password for admin from 192.168.1.200 port 22 ssh2
 
-🔧 Enhanced Wazuh Telegram Integration v2.0.1
+🔧 Enhanced Wazuh Telegram Integration v2.2.0
 ```
 
 ---
@@ -125,18 +118,40 @@ Edit `/var/ossec/integrations/telegram_config.json`:
 ```json
 {
   "chat_id": "-1001234567890",
+  "hook_url": "",
+  "message_thread_id": null,
   "parse_mode": "HTML",
   "disable_notification": false,
   "rate_limit_seconds": 1,
   "max_message_length": 4096,
   "severity_levels": {
     "low": [0, 1, 2],
-    "medium": [3, 4, 5, 6, 7], 
+    "medium": [3, 4, 5, 6, 7],
     "high": [8, 9, 10, 11],
     "critical": [12, 13, 14, 15]
+  },
+  "custom_filters": {
+    "exclude_rules": [5402],
+    "include_only_rules": [],
+    "exclude_agents": ["test-vm"],
+    "include_only_agents": []
+  },
+  "message_templates": {
+    "custom_header": "<b>🏢 ACME SOC</b>",
+    "custom_footer": ""
   }
 }
 ```
+
+| Option | Description |
+|---|---|
+| `chat_id` | Target chat/group/channel ID (or `@channelname`). Can also be set with `TELEGRAM_CHAT_ID` env var or `<api_key>` in `ossec.conf` |
+| `hook_url` | Used only if `<hook_url>` is not set in `ossec.conf` (or `TELEGRAM_HOOK_URL` env var) |
+| `message_thread_id` | Topic ID for forum supergroups (optional) |
+| `custom_filters` | Exclude / allow-list by rule ID and agent name |
+| `message_templates` | Optional HTML header / footer (empty footer = default) |
+
+All alert values are HTML-escaped, so logs containing `<`, `>` or `&` are delivered correctly. If Telegram still rejects the formatting, the alert is re-sent as plain text. The bot token is never written to the log file.
 
 ### Multiple Alert Levels
 Add multiple integration blocks to `/var/ossec/etc/ossec.conf`:

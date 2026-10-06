@@ -38,61 +38,85 @@ fi
 
 echo -e "${GREEN}✅ Wazuh installation found${NC}"
 
-# Check Python version
-PYTHON_VERSION=$($WAZUH_PATH/framework/python/bin/python3 --version 2>&1 | cut -d' ' -f2)
+# Detect Wazuh python and group (Wazuh < 4.3 uses "ossec")
+WPYTHON="$WAZUH_PATH/framework/python/bin/python3"
+if [ ! -x "$WPYTHON" ]; then
+    echo -e "${RED}❌ Wazuh embedded Python not found at $WPYTHON (is this a Wazuh manager?)${NC}"
+    exit 1
+fi
+
+if getent group wazuh > /dev/null 2>&1; then
+    WAZUH_GROUP="wazuh"
+elif getent group ossec > /dev/null 2>&1; then
+    WAZUH_GROUP="ossec"
+else
+    echo -e "${RED}❌ Neither 'wazuh' nor 'ossec' group exists${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✅ Wazuh group: $WAZUH_GROUP${NC}"
+
+PYTHON_VERSION=$("$WPYTHON" --version 2>&1 | cut -d' ' -f2)
 echo -e "${GREEN}✅ Python version: $PYTHON_VERSION${NC}"
 
-# Install Python dependencies
-echo -e "${YELLOW}📦 Installing Python dependencies...${NC}"
-$WAZUH_PATH/framework/python/bin/python3 -m pip install --upgrade pip
-$WAZUH_PATH/framework/python/bin/python3 -m pip install requests urllib3
+# Python dependencies (bundled with Wazuh; install only if missing)
+if "$WPYTHON" -c "import requests, urllib3" > /dev/null 2>&1; then
+    echo -e "${GREEN}✅ Python dependencies already available${NC}"
+else
+    echo -e "${YELLOW}📦 Installing Python dependencies...${NC}"
+    "$WPYTHON" -m pip install requests urllib3
+fi
 
 # Create integration directory
 mkdir -p "$INTEGRATION_PATH"
 mkdir -p "$(dirname "$LOG_FILE")"
 
-# Download integration files
-echo -e "${YELLOW}📥 Downloading integration files...${NC}"
+# Use local files when run from a cloned repo, otherwise download them
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
 
-# Download custom-telegram (executable)
-if curl -sSL "$REPO_URL/custom-telegram" -o /tmp/custom-telegram; then
-    cp /tmp/custom-telegram "$INTEGRATION_PATH/"
-    echo -e "${GREEN}✅ Downloaded custom-telegram${NC}"
-else
-    echo -e "${RED}❌ Failed to download custom-telegram${NC}"
-    exit 1
-fi
-
-# Download custom-telegram.py
-if curl -sSL "$REPO_URL/custom-telegram.py" -o /tmp/custom-telegram.py; then
-    cp /tmp/custom-telegram.py "$INTEGRATION_PATH/"
-    echo -e "${GREEN}✅ Downloaded custom-telegram.py${NC}"
-else
-    echo -e "${RED}❌ Failed to download custom-telegram.py${NC}"
-    exit 1
-fi
-
-# Download telegram_config.json
-if curl -sSL "$REPO_URL/telegram_config.json" -o /tmp/telegram_config.json; then
-    if [ ! -f "$CONFIG_FILE" ]; then
-        cp /tmp/telegram_config.json "$CONFIG_FILE"
-        echo -e "${GREEN}✅ Downloaded telegram_config.json${NC}"
+fetch_file() {
+    local name="$1"
+    if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/$name" ]; then
+        cp "$SCRIPT_DIR/$name" "$TMP_DIR/$name"
     else
-        echo -e "${YELLOW}⚠️  Configuration file already exists, skipping...${NC}"
+        curl -fsSL "$REPO_URL/$name" -o "$TMP_DIR/$name"
     fi
+}
+
+echo -e "${YELLOW}📥 Fetching integration files...${NC}"
+
+for f in custom-telegram custom-telegram.py; do
+    if fetch_file "$f"; then
+        cp "$TMP_DIR/$f" "$INTEGRATION_PATH/$f"
+        echo -e "${GREEN}✅ Installed $f${NC}"
+    else
+        echo -e "${RED}❌ Failed to fetch $f${NC}"
+        exit 1
+    fi
+done
+# Windows line endings would break the shell wrapper
+sed -i 's/\r$//' "$INTEGRATION_PATH/custom-telegram"
+
+if [ -f "$CONFIG_FILE" ]; then
+    echo -e "${YELLOW}⚠️  Configuration file already exists, keeping it${NC}"
+elif fetch_file telegram_config.json; then
+    cp "$TMP_DIR/telegram_config.json" "$CONFIG_FILE"
+    echo -e "${GREEN}✅ Installed telegram_config.json${NC}"
 else
-    echo -e "${YELLOW}⚠️  Could not download config, creating default...${NC}"
-    # Create default config if download fails
+    echo -e "${YELLOW}⚠️  Could not fetch config, creating default...${NC}"
     cat > "$CONFIG_FILE" << 'EOF'
 {
   "chat_id": "",
+  "hook_url": "",
+  "message_thread_id": null,
   "parse_mode": "HTML",
   "disable_notification": false,
   "rate_limit_seconds": 1,
   "max_message_length": 4096,
   "severity_levels": {
     "low": [0, 1, 2],
-    "medium": [3, 4, 5, 6, 7], 
+    "medium": [3, 4, 5, 6, 7],
     "high": [8, 9, 10, 11],
     "critical": [12, 13, 14, 15]
   },
@@ -101,6 +125,10 @@ else
     "include_only_rules": [],
     "exclude_agents": [],
     "include_only_agents": []
+  },
+  "message_templates": {
+    "custom_header": "",
+    "custom_footer": ""
   }
 }
 EOF
@@ -108,16 +136,17 @@ fi
 
 # Set permissions
 echo -e "${YELLOW}🔐 Setting permissions...${NC}"
-chown root:wazuh "$INTEGRATION_PATH/custom-telegram"*
-chmod 750 "$INTEGRATION_PATH/custom-telegram"*
-chown root:wazuh "$CONFIG_FILE"
+chown root:"$WAZUH_GROUP" "$INTEGRATION_PATH/custom-telegram" "$INTEGRATION_PATH/custom-telegram.py"
+chmod 750 "$INTEGRATION_PATH/custom-telegram" "$INTEGRATION_PATH/custom-telegram.py"
+chown root:"$WAZUH_GROUP" "$CONFIG_FILE"
 chmod 640 "$CONFIG_FILE"
 
-# Setup logging
+# Setup logging (integratord runs as the wazuh/ossec user)
 echo -e "${YELLOW}📝 Setting up logging...${NC}"
+WAZUH_USER="$WAZUH_GROUP"
 touch "$LOG_FILE"
-chown wazuh:wazuh "$LOG_FILE"
-chmod 640 "$LOG_FILE"
+chown "$WAZUH_USER":"$WAZUH_GROUP" "$LOG_FILE"
+chmod 660 "$LOG_FILE"
 
 # Setup logrotate
 cat > /etc/logrotate.d/wazuh-telegram << 'EOF'
@@ -129,9 +158,10 @@ cat > /etc/logrotate.d/wazuh-telegram << 'EOF'
     delaycompress
     notifempty
     copytruncate
-    su wazuh wazuh
+    su WAZUH_USER WAZUH_GROUP
 }
 EOF
+sed -i "s/WAZUH_USER WAZUH_GROUP/$WAZUH_USER $WAZUH_GROUP/" /etc/logrotate.d/wazuh-telegram
 
 # Create test script
 echo -e "${YELLOW}🧪 Creating test script...${NC}"
@@ -152,7 +182,7 @@ from datetime import datetime
 def create_test_alert():
     """Create a test alert for testing"""
     test_alert = {
-        "timestamp": datetime.now().isoformat() + "Z",
+        "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000+0000"),
         "rule": {
             "level": 10,
             "id": "31151",
@@ -165,10 +195,9 @@ def create_test_alert():
             "ip": "192.168.1.100"
         },
         "location": "/var/log/auth.log",
-        "srcip": "192.168.1.200",
-        "user": "admin",
-        "program_name": "sshd",
-        "full_log": "TEST: Failed password for admin from 192.168.1.200 port 22 ssh2"
+        "predecoder": {"program_name": "sshd"},
+        "data": {"srcip": "192.168.1.200", "dstuser": "admin"},
+        "full_log": "TEST: Failed password for admin from 192.168.1.200 port 22 ssh2 <test> & more"
     }
     return test_alert
 
@@ -230,11 +259,11 @@ def test_with_direct_call(bot_token):
         cmd = [
             "/var/ossec/integrations/custom-telegram",
             alert_file,
-            "31151",  # rule_id
+            "",  # api_key (unused when chat_id is in config)
             hook_url
         ]
         
-        print(f"📞 Calling: {' '.join(cmd)}")
+        print(f"📞 Calling: {cmd[0]} {alert_file} '' https://api.telegram.org/bot<hidden>/sendMessage")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         
         if result.returncode == 0:
@@ -315,9 +344,8 @@ def main():
         print("📱 Check your Telegram chat for test message")
         print("\n💡 Next steps:")
         print("1. Add integration blocks to /var/ossec/etc/ossec.conf")
-        print("2. Use <n> not <n> in integration blocks")
-        print("3. Restart Wazuh: sudo systemctl restart wazuh-manager")
-        print("4. Monitor logs: sudo tail -f /var/ossec/logs/telegram_integration.log")
+        print("2. Restart Wazuh: sudo systemctl restart wazuh-manager")
+        print("3. Monitor logs: sudo tail -f /var/ossec/logs/telegram_integration.log")
     else:
         print("\n❌ Test failed!")
         print("\n🔍 Troubleshooting:")
@@ -331,10 +359,7 @@ if __name__ == "__main__":
 EOF
 
 chmod +x "$INTEGRATION_PATH/test_integration.py"
-chown root:wazuh "$INTEGRATION_PATH/test_integration.py"
-
-# Clean up temporary files
-rm -f /tmp/custom-telegram /tmp/custom-telegram.py /tmp/telegram_config.json
+chown root:"$WAZUH_GROUP" "$INTEGRATION_PATH/test_integration.py"
 
 echo -e "${GREEN}🎉 Installation completed successfully!${NC}"
 echo -e ""
@@ -351,13 +376,12 @@ echo -e "   ${PURPLE}sudo nano $WAZUH_PATH/etc/ossec.conf${NC}"
 echo -e ""
 echo -e "${YELLOW}   Add this configuration block:${NC}"
 echo -e "${GREEN}<integration>${NC}"
-echo -e "${GREEN}    <n>custom-telegram</n>${NC}"
+echo -e "${GREEN}    <name>custom-telegram</name>${NC}"
 echo -e "${GREEN}    <level>8</level>${NC}"
 echo -e "${GREEN}    <hook_url>https://api.telegram.org/bot<YOUR_BOT_TOKEN>/sendMessage</hook_url>${NC}"
 echo -e "${GREEN}    <alert_format>json</alert_format>${NC}"
 echo -e "${GREEN}</integration>${NC}"
 echo -e ""
-echo -e "${RED}   ⚠️  IMPORTANT: Use <n> not <n> in the integration block!${NC}"
 echo -e "${RED}   ⚠️  Replace <YOUR_BOT_TOKEN> with your actual bot token!${NC}"
 echo -e ""
 echo -e "${YELLOW}3. Test the Integration:${NC}"
@@ -381,7 +405,7 @@ echo -e "${BLUE}========================================${NC}"
 echo -e ""
 echo -e "${YELLOW}# For Critical Alerts (Level 12+):${NC}"
 echo -e "${GREEN}<integration>${NC}"
-echo -e "${GREEN}    <n>custom-telegram</n>${NC}"
+echo -e "${GREEN}    <name>custom-telegram</name>${NC}"
 echo -e "${GREEN}    <level>12</level>${NC}"
 echo -e "${GREEN}    <hook_url>https://api.telegram.org/bot<TOKEN>/sendMessage</hook_url>${NC}"
 echo -e "${GREEN}    <alert_format>json</alert_format>${NC}"
@@ -389,7 +413,7 @@ echo -e "${GREEN}</integration>${NC}"
 echo -e ""
 echo -e "${YELLOW}# For Authentication Failures:${NC}"
 echo -e "${GREEN}<integration>${NC}"
-echo -e "${GREEN}    <n>custom-telegram</n>${NC}"
+echo -e "${GREEN}    <name>custom-telegram</name>${NC}"
 echo -e "${GREEN}    <group>authentication_failed</group>${NC}"
 echo -e "${GREEN}    <hook_url>https://api.telegram.org/bot<TOKEN>/sendMessage</hook_url>${NC}"
 echo -e "${GREEN}    <alert_format>json</alert_format>${NC}"
